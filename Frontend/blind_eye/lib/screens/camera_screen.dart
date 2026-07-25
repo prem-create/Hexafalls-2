@@ -13,8 +13,17 @@ import '../services/api_service.dart';
 import '../services/speech_service.dart';
 import '../services/voice_command_service.dart';
 
+// ── Session ID ───────────────────────────────────────────────────────────────
+//
+// A stable, app-lifetime token sent with every streamed frame so the backend
+// can maintain tracking continuity (motion/direction/distance) across frames
+// within this session. Generated once when the class is first loaded.
+final String _kSessionId =
+    'flutter-${DateTime.now().millisecondsSinceEpoch}';
+
 class CameraScreen extends StatefulWidget {
   final List<CameraDescription> cameras;
+
   const CameraScreen({super.key, required this.cameras});
 
   @override
@@ -118,8 +127,6 @@ class _CameraScreenState extends State<CameraScreen> {
     if (mounted) setState(() => _error = message);
   }
 
-  // ── Streaming via Timer + takePicture ──────────────────────
-
   void _startStream() {
     setState(() {
       _streaming = true;
@@ -135,10 +142,11 @@ class _CameraScreenState extends State<CameraScreen> {
   void _stopStream() {
     _streamTimer?.cancel();
     _streamTimer = null;
-    if (mounted)
+    if (mounted) {
       setState(() {
         _streaming = false;
       });
+    }
   }
 
   void _toggleStream() {
@@ -155,31 +163,96 @@ class _CameraScreenState extends State<CameraScreen> {
 
     try {
       final file = await _controller.takePicture();
-      final result = await ApiService.analyzeFile(File(file.path));
-      if (mounted)
+      final result = await ApiService.analyzeFile(
+        File(file.path),
+        // Stable session token lets the backend link this frame to the
+        // ongoing tracking session (direction of movement, distance, speed).
+        sessionId: AppConfig.enableTracking ? _kSessionId : null,
+      );
+      if (mounted) {
         setState(() {
           _lastResult = result;
           _error = null;
         });
+      }
       _announce(result);
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
+      }
     } finally {
       _requestInFlight = false;
     }
   }
 
-  /// Speaks the scene summary aloud and, for hazards, adds a haptic
-  /// buzz so the warning registers even if audio is muted or missed.
   void _announce(AnalysisResult result) {
     if (result.hazardDetected) {
       HapticFeedback.heavyImpact();
     }
-    _speech.speak(result.summary, isHazard: result.hazardDetected);
+    _speech.speak(
+      _buildNarration(result),
+      isHazard: result.hazardDetected,
+    );
   }
 
-  // ── Gallery picker ─────────────────────────────────────────
+  String _buildNarration(AnalysisResult result) {
+    final parts = <String>[result.summary];
+
+    parts.add(
+      'Detected ${result.objectCount} object${result.objectCount == 1 ? '' : 's'}.',
+    );
+
+    if (result.suggestedDirection != null) {
+      parts.add('Suggested direction is ${result.suggestedDirection}.');
+    }
+
+    final highlights = result.objects
+        .take(2)
+        .map(_describeObjectForSpeech)
+        .where((text) => text.isNotEmpty)
+        .toList();
+    if (highlights.isNotEmpty) {
+      parts.add('Key objects: ${highlights.join('; ')}.');
+    }
+
+    return parts.join(' ');
+  }
+
+  String _describeObjectForSpeech(DetectedObject object) {
+    final parts = <String>[object.label];
+
+    if (object.direction != null && object.direction!.isNotEmpty) {
+      parts.add(object.direction!.replaceAll('-', ' '));
+    }
+
+    if (object.proximity != null && object.proximity!.isNotEmpty) {
+      parts.add(object.proximity!);
+    }
+
+    if (object.isHazard == true) {
+      parts.add('hazard');
+    }
+
+    // Motion analysis — only present when tracking recognised this object
+    // from a previous frame with enough confidence (isReliable). Adds the
+    // direction of movement and, when metric depth is available, distance.
+    final motion = object.motion;
+    if (motion != null && motion.isReliable && !motion.isUnknown) {
+      if (motion.isApproaching) {
+        parts.add('approaching');
+      } else if (motion.isMovingAway) {
+        parts.add('moving away');
+      } else if (motion.isStationary) {
+        parts.add('stationary');
+      }
+
+      if (motion.distance.isMetric) {
+        parts.add('${motion.distance.value!.toStringAsFixed(1)} meters');
+      }
+    }
+
+    return parts.join(', ');
+  }
 
   Future<void> _pickFromGallery() async {
     if (_streaming) _stopStream();
@@ -192,18 +265,20 @@ class _CameraScreenState extends State<CameraScreen> {
       _requestInFlight = true;
     });
     try {
-      final result = await ApiService.analyzeFile(File(picked.path));
+      final result = await ApiService.analyzeFile(
+        File(picked.path),
+        sessionId: null, // gallery picks are single-shot; no tracking session
+      );
       if (mounted) setState(() => _lastResult = result);
       _announce(result);
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
+      }
     } finally {
       if (mounted) setState(() => _requestInFlight = false);
     }
   }
-
-  // ── Build ───────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -212,28 +287,29 @@ class _CameraScreenState extends State<CameraScreen> {
       body: SafeArea(
         child: Stack(
           children: [
-            // Camera preview
             if (_initialized)
               Positioned.fill(child: CameraPreview(_controller))
             else if (_error != null)
               Center(
-                  child: Text(_error!,
-                      style: const TextStyle(color: Colors.red),
-                      textAlign: TextAlign.center))
+                child: Text(
+                  _error!,
+                  style: const TextStyle(color: Colors.red),
+                  textAlign: TextAlign.center,
+                ),
+              )
             else
               const Center(
-                  child: CircularProgressIndicator(color: Colors.white)),
+                child: CircularProgressIndicator(color: Colors.white),
+              ),
 
-            // Results overlay
             if (_lastResult != null)
               Positioned(
                 left: 0,
                 right: 0,
-                bottom: 100,
+                bottom: 96,
                 child: _ResultsOverlay(result: _lastResult!),
               ),
 
-            // Voice-command status
             Positioned(
               left: 16,
               right: 16,
@@ -246,7 +322,6 @@ class _CameraScreenState extends State<CameraScreen> {
               ),
             ),
 
-            // Error toast
             if (_error != null && _initialized)
               Positioned(
                 left: 16,
@@ -258,13 +333,13 @@ class _CameraScreenState extends State<CameraScreen> {
                     color: Colors.red.withOpacity(0.8),
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: Text(_error!,
-                      style:
-                          const TextStyle(color: Colors.white, fontSize: 13)),
+                  child: Text(
+                    _error!,
+                    style: const TextStyle(color: Colors.white, fontSize: 13),
+                  ),
                 ),
               ),
 
-            // In-flight indicator
             if (_requestInFlight)
               const Positioned(
                 top: 16,
@@ -273,11 +348,12 @@ class _CameraScreenState extends State<CameraScreen> {
                   width: 18,
                   height: 18,
                   child: CircularProgressIndicator(
-                      color: Colors.white, strokeWidth: 2),
+                    color: Colors.white,
+                    strokeWidth: 2,
+                  ),
                 ),
               ),
 
-            // Bottom controls
             Positioned(
               left: 0,
               right: 0,
@@ -314,8 +390,7 @@ class _VoiceStatus extends StatelessWidget {
   Widget build(BuildContext context) {
     if (!listening && !ringing) return const SizedBox.shrink();
 
-    final label =
-        ringing ? 'Phone finder is ringing' : 'Voice detection active';
+    final label = ringing ? 'Phone finder is ringing' : 'Voice detection active';
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
@@ -332,24 +407,36 @@ class _VoiceStatus extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(label,
-                    style: const TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.w700)),
+                Text(
+                  label,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
                 if (!ringing && transcript != null)
-                  Text(transcript!,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style:
-                          const TextStyle(color: Colors.white70, fontSize: 12)),
+                  Text(
+                    transcript!,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 12,
+                    ),
+                  ),
               ],
             ),
           ),
           if (ringing)
             TextButton(
               onPressed: onStopRingtone,
-              child: const Text('STOP',
-                  style: TextStyle(
-                      color: Colors.white, fontWeight: FontWeight.bold)),
+              child: const Text(
+                'STOP',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
             ),
         ],
       ),
@@ -358,9 +445,11 @@ class _VoiceStatus extends StatelessWidget {
 }
 
 // ── Results overlay ──────────────────────────────────────────
+// Styled to match the compact card design used in the other app build.
 
 class _ResultsOverlay extends StatelessWidget {
   final AnalysisResult result;
+
   const _ResultsOverlay({required this.result});
 
   @override
@@ -381,6 +470,7 @@ class _ResultsOverlay extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
+          // Hazard banner
           if (result.hazardDetected)
             const Padding(
               padding: EdgeInsets.only(bottom: 4),
@@ -394,51 +484,220 @@ class _ResultsOverlay extends StatelessWidget {
                 ),
               ),
             ),
+
+          // Scene summary
           Text(
             result.summary,
             style: const TextStyle(
-                color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
+              color: Colors.white,
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+            ),
           ),
+
+          // Object chips (label + confidence + direction/proximity badge)
           if (result.objects.isNotEmpty) ...[
             const SizedBox(height: 8),
             Wrap(
               spacing: 6,
               runSpacing: 4,
-              children: result.objects.map((obj) {
-                final color = _confidenceColor(obj.confidence);
-                return Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: color.withOpacity(0.2),
-                    border: Border.all(color: color),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text(
-                    '${obj.label} ${(obj.confidence * 100).toStringAsFixed(0)}%',
-                    style: TextStyle(
-                        color: color,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500),
-                  ),
-                );
-              }).toList(),
+              children: result.objects.map((obj) => _ObjectChip(obj: obj)).toList(),
             ),
           ],
+
+          // Scene tags, if the backend supplied any
+          if (result.sceneTags != null && result.sceneTags!.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              children: result.sceneTags!
+                  .map((tag) => Text(
+                        '#$tag',
+                        style: const TextStyle(
+                          color: Colors.tealAccent,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ))
+                  .toList(),
+            ),
+          ],
+
+          // Footer: model + timing + object count + suggested direction
           const SizedBox(height: 6),
-          Text(
-            '${result.processingTimeMs.toStringAsFixed(0)} ms · ${result.objects.length} object${result.objects.length == 1 ? '' : 's'}',
-            style: const TextStyle(color: Colors.white38, fontSize: 11),
+          Wrap(
+            spacing: 6,
+            runSpacing: 2,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Text(
+                result.modelUsed,
+                style: const TextStyle(color: Colors.white38, fontSize: 11),
+              ),
+              Text(
+                '· ${result.processingTimeMs.toStringAsFixed(0)} ms'
+                ' · ${result.objectCount} object'
+                '${result.objectCount == 1 ? '' : 's'}',
+                style: const TextStyle(color: Colors.white38, fontSize: 11),
+              ),
+              if (result.suggestedDirection != null)
+                Text(
+                  '· move ${result.suggestedDirection}',
+                  style: const TextStyle(
+                    color: Colors.greenAccent,
+                    fontSize: 11,
+                  ),
+                ),
+              if (result.trackingEnabled)
+                const Text(
+                  '· tracking on',
+                  style: TextStyle(color: Colors.tealAccent, fontSize: 11),
+                ),
+            ],
           ),
         ],
       ),
     );
+  }
+}
+
+// ── Object chip ───────────────────────────────────────────────
+
+class _ObjectChip extends StatelessWidget {
+  final DetectedObject obj;
+  const _ObjectChip({required this.obj});
+
+  @override
+  Widget build(BuildContext context) {
+    final baseColor = _confidenceColor(obj.confidence);
+    final motion = obj.motion;
+    final hasReliableMotion =
+        motion != null && motion.isReliable && !motion.isUnknown;
+    final motionColor = hasReliableMotion ? _motionColor(motion) : null;
+
+    // Prefer the motion badge (direction of movement + speed) when the
+    // backend has reliable tracking data for this object; otherwise fall
+    // back to the static direction/proximity badge as before.
+    final badge = hasReliableMotion ? null : _badgeLabel(obj);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: baseColor.withOpacity(0.15),
+        border: Border.all(
+          color: (obj.isHazard ?? false)
+              ? Colors.redAccent
+              : (motionColor ?? baseColor),
+        ),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            '${obj.label} ${(obj.confidence * 100).toStringAsFixed(0)}%',
+            style: TextStyle(
+              color: baseColor,
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+
+          // Motion state badge (approaching / moving away / stationary),
+          // only shown when the backend ran tracking for this object.
+          if (hasReliableMotion) ...[
+            const SizedBox(width: 4),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+              decoration: BoxDecoration(
+                color: (motionColor ?? baseColor).withOpacity(0.25),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                motion.stateLabel,
+                style: TextStyle(
+                  color: motionColor ?? baseColor,
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+
+            // Metric speed label, only when depth is available
+            if (motion.speedLabel != null) ...[
+              const SizedBox(width: 3),
+              Text(
+                motion.speedLabel!,
+                style: const TextStyle(color: Colors.white54, fontSize: 10),
+              ),
+            ],
+          ],
+
+          // Direction / proximity badge — fallback when no motion data
+          if (badge != null) ...[
+            const SizedBox(width: 4),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+              decoration: BoxDecoration(
+                color: baseColor.withOpacity(0.25),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                badge,
+                style: TextStyle(
+                  color: baseColor,
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+
+          // Track ID (small, subtle) — only present while tracking
+          if (obj.trackId != null) ...[
+            const SizedBox(width: 4),
+            Text(
+              '#${obj.trackId}',
+              style: const TextStyle(color: Colors.white24, fontSize: 9),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  String? _badgeLabel(DetectedObject object) {
+    final parts = <String>[];
+    if (object.direction != null && object.direction!.isNotEmpty) {
+      parts.add(object.direction!.replaceAll('-', ' '));
+    }
+    if (object.proximity != null && object.proximity!.isNotEmpty) {
+      parts.add(object.proximity!);
+    }
+    if (parts.isEmpty) return null;
+    return parts.join(' · ');
   }
 
   Color _confidenceColor(double c) {
     if (c >= 0.8) return Colors.greenAccent;
     if (c >= 0.6) return Colors.orangeAccent;
     return Colors.redAccent;
+  }
+
+  /// Accent colour that signals urgency based on motion state.
+  Color? _motionColor(MotionInfo? motion) {
+    if (motion == null || !motion.isReliable) return null;
+    switch (motion.state) {
+      case 'APPROACHING':
+        return Colors.orangeAccent;
+      case 'MOVING_AWAY':
+        return Colors.lightBlueAccent;
+      case 'STATIONARY':
+        return Colors.white54;
+      default:
+        return null;
+    }
   }
 }
 

@@ -15,7 +15,7 @@
 ///   Set baseUrl to your Render URL instead.
 class AppConfig {
   static const String baseUrl =
-      'http://192.168.1.88:8000'; // <-- change this to your laptop's IP
+      'http://10.92.75.91:8000'; // <-- change this to your laptop's IP
   static const String analyzeEndpoint = '$baseUrl/analyze';
   static const String healthEndpoint = '$baseUrl/health';
 
@@ -25,4 +25,12 @@ class AppConfig {
   /// How often to send a frame to the backend (milliseconds)
   /// 1500ms = safe for CPU inference + isolate conversion
   static const int streamIntervalMs = 1500;
+
+  /// Whether to enable temporal object tracking and motion analysis.
+  /// When true, a stable session_id is sent with every streamed frame so
+  /// the backend can track objects across frames and return direction of
+  /// movement, distance, and closing speed. Harmless if the backend
+  /// doesn't support it — session_id is just ignored and responses parse
+  /// exactly as before.
+  static const bool enableTracking = true;
 }
