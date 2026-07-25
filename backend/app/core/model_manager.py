@@ -2,9 +2,12 @@
 Walking Eye - AI Perception Engine
 Model Manager.
 
-Responsible for loading, holding, and providing access to the YOLO model.
-The model is loaded ONCE at application startup and reused for every request.
-This is the single source of truth for the AI model lifecycle.
+Responsible for loading, holding, and providing access to:
+  - YOLO object detection model
+  - MiDaS depth estimation model (when ENABLE_DEPTH=True)
+
+Both models are loaded ONCE at application startup and reused for every
+request.  This is the single source of truth for the AI model lifecycle.
 """
 
 from pathlib import Path
@@ -19,39 +22,41 @@ logger = get_logger(__name__)
 
 class ModelManager:
     """
-    Manages the lifecycle of the YOLO object detection model.
+    Manages the lifecycle of the YOLO and (optionally) MiDaS depth models.
 
     Designed to be instantiated once and stored in app.state.
-    Thread-safe for read operations (inference); YOLO handles this internally.
-
-    Future extension: add depth model, OCR model, etc. as additional
-    attributes following the same load-once pattern.
+    Thread-safe for read operations (inference); YOLO and torch handle
+    this internally.
     """
 
-    def __init__(self, model_path: str) -> None:
+    def __init__(self, model_path: str, enable_depth: bool = False) -> None:
         """
         Args:
-            model_path: Path to the YOLO model weights (.pt file).
-                        If the file doesn't exist, Ultralytics will
-                        auto-download it from the official model hub.
+            model_path:    Path to the YOLO model weights (.pt file).
+                           Ultralytics auto-downloads if not present.
+            enable_depth:  When True, also loads MiDaS at startup.
         """
         self.model_path = model_path
+        self.enable_depth = enable_depth
+
         self._model: Optional[YOLO] = None
+        self._depth_estimator = None   # DepthEstimator | None
+
+    # ------------------------------------------------------------------
+    # YOLO
+    # ------------------------------------------------------------------
 
     def load(self) -> None:
         """
-        Loads the YOLO model into memory.
+        Loads the YOLO model (and optionally the depth model) into memory.
         Called once during application startup via the lifespan handler.
 
         Raises:
-            RuntimeError: If the model fails to load.
+            RuntimeError: If the YOLO model fails to load.
         """
         logger.info(f"Loading YOLO model from: {self.model_path}")
 
-        model_file = Path(self.model_path)
-
-        # Auto-download if not present (Ultralytics handles this natively)
-        if not model_file.exists():
+        if not Path(self.model_path).exists():
             logger.warning(
                 f"Model file not found at '{self.model_path}'. "
                 "Ultralytics will attempt to download it automatically."
@@ -59,36 +64,62 @@ class ModelManager:
 
         try:
             self._model = YOLO(self.model_path)
-            # Warm up the model with a dummy inference pass to avoid
-            # cold-start latency on the first real request.
-            self._warmup()
+            self._warmup_yolo()
             logger.info(f"YOLO model loaded successfully: {self.model_path}")
         except Exception as e:
             logger.error(f"Failed to load YOLO model: {e}")
             raise RuntimeError(f"Model loading failed: {e}") from e
 
-    def _warmup(self) -> None:
-        """
-        Runs a silent dummy inference to initialize CUDA/CPU kernels.
-        This ensures the first real request doesn't pay the warmup cost.
-        """
+        # --- Depth model ---
+        if self.enable_depth:
+            self._load_depth_model()
+
+    def _warmup_yolo(self) -> None:
+        """Silent YOLO warmup to initialise CUDA/CPU kernels."""
         try:
             import numpy as np
-            dummy_image = np.zeros((640, 640, 3), dtype=np.uint8)
-            self._model(dummy_image, verbose=False)
-            logger.info("Model warmup complete.")
+            dummy = np.zeros((640, 640, 3), dtype=np.uint8)
+            self._model(dummy, verbose=False)
+            logger.info("YOLO warmup complete.")
         except Exception as e:
-            # Warmup failure is non-fatal — log and continue
-            logger.warning(f"Model warmup skipped due to error: {e}")
+            logger.warning(f"YOLO warmup skipped: {e}")
+
+    # ------------------------------------------------------------------
+    # Depth (MiDaS)
+    # ------------------------------------------------------------------
+
+    def _load_depth_model(self) -> None:
+        """Loads MiDaS depth estimator.  Non-fatal — logs and continues."""
+        try:
+            from app.config.settings import get_settings
+            from app.vision.depth_estimator import DepthEstimator
+
+            s = get_settings()
+            estimator = DepthEstimator(
+                model_type=s.DEPTH_MODEL_TYPE,
+                scale_factor=s.DEPTH_SCALE_FACTOR,
+                person_anchor=s.DEPTH_PERSON_ANCHOR,
+                person_height_m=s.PERSON_HEIGHT_M,
+                patch_size=s.DEPTH_PATCH_SIZE,
+            )
+            estimator.load()
+            self._depth_estimator = estimator
+            logger.info("Depth estimator loaded and ready.")
+        except Exception as e:
+            # Depth failure is non-fatal — fall back to bbox-proxy mode
+            logger.warning(
+                f"Depth estimator failed to load — "
+                f"depth will be unavailable this session: {e}"
+            )
+            self._depth_estimator = None
+
+    # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
 
     @property
     def model(self) -> YOLO:
-        """
-        Returns the loaded YOLO model instance.
-
-        Raises:
-            RuntimeError: If accessed before load() has been called.
-        """
+        """Returns the loaded YOLO model instance."""
         if self._model is None:
             raise RuntimeError(
                 "YOLO model is not loaded. "
@@ -98,19 +129,32 @@ class ModelManager:
 
     @property
     def is_loaded(self) -> bool:
-        """Returns True if the model is loaded and ready."""
+        """Returns True if the YOLO model is loaded and ready."""
         return self._model is not None
 
-    def get_model_info(self) -> dict:
-        """
-        Returns basic model metadata for health checks and API responses.
-        """
-        if not self.is_loaded:
-            return {"loaded": False, "path": self.model_path}
+    @property
+    def depth_estimator(self):
+        """Returns the DepthEstimator instance, or None when not loaded."""
+        return self._depth_estimator
 
-        return {
-            "loaded": True,
-            "path": self.model_path,
-            "type": "YOLOv8",
-            "task": getattr(self._model, "task", "detect"),
+    @property
+    def depth_enabled(self) -> bool:
+        """True when depth estimation is loaded and operational."""
+        return self._depth_estimator is not None and self._depth_estimator.is_loaded
+
+    def get_model_info(self) -> dict:
+        """Returns model metadata for health checks and API responses."""
+        info = {
+            "yolo": {
+                "loaded": self.is_loaded,
+                "path": self.model_path,
+                "type": "YOLO11n",
+            },
+            "depth": {
+                "loaded": self.depth_enabled,
+                "model_type": getattr(
+                    self._depth_estimator, "model_type", None
+                ),
+            },
         }
+        return info

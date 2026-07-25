@@ -15,6 +15,11 @@ numpy
 # --- AI / Object Detection ---
 ultralytics
 
+# --- Depth Estimation (MiDaS DPT_Hybrid via PyTorch Hub) ---
+torch
+torchvision
+timm
+
 # --- Data Validation ---
 pydantic
 pydantic-settings
