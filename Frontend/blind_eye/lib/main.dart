@@ -5,6 +5,7 @@ import 'screens/camera_screen.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final cameras = await availableCameras();
+  
   runApp(WalkingEyeApp(cameras: cameras));
 }
 

@@ -15,7 +15,7 @@
 ///   Set baseUrl to your Render URL instead.
 class AppConfig {
   static const String baseUrl =
-      'http://192.168.1.64:8000'; // <-- change this to your laptop's IP
+      'http://192.168.1.88:8000'; // <-- change this to your laptop's IP
   static const String analyzeEndpoint = '$baseUrl/analyze';
   static const String healthEndpoint = '$baseUrl/health';
 

@@ -8,8 +8,10 @@ import 'package:image_picker/image_picker.dart';
 
 import '../config/app_config.dart';
 import '../models/analysis_result.dart';
+import '../models/voice_command.dart';
 import '../services/api_service.dart';
 import '../services/speech_service.dart';
+import '../services/voice_command_service.dart';
 
 class CameraScreen extends StatefulWidget {
   final List<CameraDescription> cameras;
@@ -30,12 +32,28 @@ class _CameraScreenState extends State<CameraScreen> {
 
   Timer? _streamTimer;
   final SpeechService _speech = SpeechService();
+  late final VoiceCommandService _voiceCommands;
+  bool _voiceListening = false;
+  bool _phoneRinging = false;
+  bool _startDetectionRequested = false;
+  String? _voiceTranscript;
 
   @override
   void initState() {
     super.initState();
     _speech.init();
+    _voiceCommands = VoiceCommandService(
+      onCommand: _handleVoiceCommand,
+      onListeningStateChanged: (isListening) {
+        if (mounted) setState(() => _voiceListening = isListening);
+      },
+      onError: _showVoiceError,
+      onTranscript: (transcript) {
+        if (mounted) setState(() => _voiceTranscript = transcript);
+      },
+    );
     _initCamera();
+    unawaited(_voiceCommands.startListening());
   }
 
   Future<void> _initCamera() async {
@@ -46,7 +64,13 @@ class _CameraScreenState extends State<CameraScreen> {
     );
     try {
       await _controller.initialize();
-      if (mounted) setState(() => _initialized = true);
+      if (mounted) {
+        setState(() => _initialized = true);
+        if (_startDetectionRequested) {
+          _startDetectionRequested = false;
+          _startStream();
+        }
+      }
     } catch (e) {
       if (mounted) setState(() => _error = 'Camera error: $e');
     }
@@ -57,13 +81,50 @@ class _CameraScreenState extends State<CameraScreen> {
     _streamTimer?.cancel();
     _controller.dispose();
     _speech.dispose();
+    unawaited(_voiceCommands.dispose());
     super.dispose();
+  }
+
+  Future<void> _toggleVoiceDetection() async {
+    if (_voiceListening) {
+      await _voiceCommands.stopListening();
+      return;
+    }
+    await _voiceCommands.startListening();
+  }
+
+  Future<void> _handleVoiceCommand(VoiceCommand command) async {
+    switch (command) {
+      case VoiceCommand.findPhone:
+        await _voiceCommands.respondToPhoneFinder();
+        if (mounted) setState(() => _phoneRinging = _voiceCommands.isRinging);
+        return;
+      case VoiceCommand.startDetection:
+        if (_initialized && !_streaming) {
+          _startStream();
+        } else if (!_initialized) {
+          _startDetectionRequested = true;
+        }
+        return;
+    }
+  }
+
+  Future<void> _stopRingtone() async {
+    await _voiceCommands.stopRingtone();
+    if (mounted) setState(() => _phoneRinging = false);
+  }
+
+  void _showVoiceError(String message) {
+    if (mounted) setState(() => _error = message);
   }
 
   // ── Streaming via Timer + takePicture ──────────────────────
 
   void _startStream() {
-    setState(() { _streaming = true; _error = null; });
+    setState(() {
+      _streaming = true;
+      _error = null;
+    });
 
     _streamTimer = Timer.periodic(
       Duration(milliseconds: AppConfig.streamIntervalMs),
@@ -74,7 +135,10 @@ class _CameraScreenState extends State<CameraScreen> {
   void _stopStream() {
     _streamTimer?.cancel();
     _streamTimer = null;
-    if (mounted) setState(() { _streaming = false; });
+    if (mounted)
+      setState(() {
+        _streaming = false;
+      });
   }
 
   void _toggleStream() {
@@ -92,10 +156,15 @@ class _CameraScreenState extends State<CameraScreen> {
     try {
       final file = await _controller.takePicture();
       final result = await ApiService.analyzeFile(File(file.path));
-      if (mounted) setState(() { _lastResult = result; _error = null; });
+      if (mounted)
+        setState(() {
+          _lastResult = result;
+          _error = null;
+        });
       _announce(result);
     } catch (e) {
-      if (mounted) setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
+      if (mounted)
+        setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
     } finally {
       _requestInFlight = false;
     }
@@ -118,13 +187,17 @@ class _CameraScreenState extends State<CameraScreen> {
     final picked = await picker.pickImage(source: ImageSource.gallery);
     if (picked == null) return;
 
-    setState(() { _error = null; _requestInFlight = true; });
+    setState(() {
+      _error = null;
+      _requestInFlight = true;
+    });
     try {
       final result = await ApiService.analyzeFile(File(picked.path));
       if (mounted) setState(() => _lastResult = result);
       _announce(result);
     } catch (e) {
-      if (mounted) setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
+      if (mounted)
+        setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
     } finally {
       if (mounted) setState(() => _requestInFlight = false);
     }
@@ -143,21 +216,42 @@ class _CameraScreenState extends State<CameraScreen> {
             if (_initialized)
               Positioned.fill(child: CameraPreview(_controller))
             else if (_error != null)
-              Center(child: Text(_error!, style: const TextStyle(color: Colors.red), textAlign: TextAlign.center))
+              Center(
+                  child: Text(_error!,
+                      style: const TextStyle(color: Colors.red),
+                      textAlign: TextAlign.center))
             else
-              const Center(child: CircularProgressIndicator(color: Colors.white)),
+              const Center(
+                  child: CircularProgressIndicator(color: Colors.white)),
 
             // Results overlay
             if (_lastResult != null)
               Positioned(
-                left: 0, right: 0, bottom: 100,
+                left: 0,
+                right: 0,
+                bottom: 100,
                 child: _ResultsOverlay(result: _lastResult!),
               ),
+
+            // Voice-command status
+            Positioned(
+              left: 16,
+              right: 16,
+              top: 16,
+              child: _VoiceStatus(
+                listening: _voiceListening,
+                ringing: _phoneRinging,
+                transcript: _voiceTranscript,
+                onStopRingtone: _stopRingtone,
+              ),
+            ),
 
             // Error toast
             if (_error != null && _initialized)
               Positioned(
-                left: 16, right: 16, top: 16,
+                left: 16,
+                right: 16,
+                top: 84,
                 child: Container(
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
@@ -165,16 +259,19 @@ class _CameraScreenState extends State<CameraScreen> {
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(_error!,
-                      style: const TextStyle(color: Colors.white, fontSize: 13)),
+                      style:
+                          const TextStyle(color: Colors.white, fontSize: 13)),
                 ),
               ),
 
             // In-flight indicator
             if (_requestInFlight)
               const Positioned(
-                top: 16, right: 16,
+                top: 16,
+                right: 16,
                 child: SizedBox(
-                  width: 18, height: 18,
+                  width: 18,
+                  height: 18,
                   child: CircularProgressIndicator(
                       color: Colors.white, strokeWidth: 2),
                 ),
@@ -182,15 +279,79 @@ class _CameraScreenState extends State<CameraScreen> {
 
             // Bottom controls
             Positioned(
-              left: 0, right: 0, bottom: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
               child: _BottomBar(
                 streaming: _streaming,
+                voiceListening: _voiceListening,
                 onToggleStream: _initialized ? _toggleStream : null,
                 onGallery: _initialized ? _pickFromGallery : null,
+                onToggleVoiceDetection: _toggleVoiceDetection,
               ),
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _VoiceStatus extends StatelessWidget {
+  const _VoiceStatus({
+    required this.listening,
+    required this.ringing,
+    required this.transcript,
+    required this.onStopRingtone,
+  });
+
+  final bool listening;
+  final bool ringing;
+  final String? transcript;
+  final VoidCallback onStopRingtone;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!listening && !ringing) return const SizedBox.shrink();
+
+    final label =
+        ringing ? 'Phone finder is ringing' : 'Voice detection active';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: (ringing ? Colors.orange : Colors.teal).withOpacity(0.9),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Icon(ringing ? Icons.ring_volume : Icons.mic,
+              color: Colors.white, size: 20),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(label,
+                    style: const TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.w700)),
+                if (!ringing && transcript != null)
+                  Text(transcript!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style:
+                          const TextStyle(color: Colors.white70, fontSize: 12)),
+              ],
+            ),
+          ),
+          if (ringing)
+            TextButton(
+              onPressed: onStopRingtone,
+              child: const Text('STOP',
+                  style: TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
+        ],
       ),
     );
   }
@@ -236,9 +397,7 @@ class _ResultsOverlay extends StatelessWidget {
           Text(
             result.summary,
             style: const TextStyle(
-                color: Colors.white,
-                fontSize: 16,
-                fontWeight: FontWeight.w600),
+                color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
           ),
           if (result.objects.isNotEmpty) ...[
             const SizedBox(height: 8),
@@ -248,7 +407,8 @@ class _ResultsOverlay extends StatelessWidget {
               children: result.objects.map((obj) {
                 final color = _confidenceColor(obj.confidence);
                 return Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(
                     color: color.withOpacity(0.2),
                     border: Border.all(color: color),
@@ -256,7 +416,10 @@ class _ResultsOverlay extends StatelessWidget {
                   ),
                   child: Text(
                     '${obj.label} ${(obj.confidence * 100).toStringAsFixed(0)}%',
-                    style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w500),
+                    style: TextStyle(
+                        color: color,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500),
                   ),
                 );
               }).toList(),
@@ -283,13 +446,17 @@ class _ResultsOverlay extends StatelessWidget {
 
 class _BottomBar extends StatelessWidget {
   final bool streaming;
+  final bool voiceListening;
   final VoidCallback? onToggleStream;
   final VoidCallback? onGallery;
+  final VoidCallback onToggleVoiceDetection;
 
   const _BottomBar({
     required this.streaming,
+    required this.voiceListening,
     required this.onToggleStream,
     required this.onGallery,
+    required this.onToggleVoiceDetection,
   });
 
   @override
@@ -304,6 +471,17 @@ class _BottomBar extends StatelessWidget {
             onPressed: onGallery,
             icon: const Icon(Icons.photo_library_outlined,
                 color: Colors.white, size: 28),
+          ),
+          IconButton(
+            tooltip: voiceListening
+                ? 'Pause voice detection'
+                : 'Start voice detection',
+            onPressed: onToggleVoiceDetection,
+            icon: Icon(
+              voiceListening ? Icons.mic : Icons.mic_none,
+              color: voiceListening ? Colors.tealAccent : Colors.white,
+              size: 28,
+            ),
           ),
           GestureDetector(
             onTap: onToggleStream,
@@ -324,7 +502,6 @@ class _BottomBar extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(width: 48),
         ],
       ),
     );
