@@ -1,0 +1,33 @@
+# ============================================================
+# Walking Eye - AI Perception Engine
+# Backend Dependencies
+# Python 3.14+ compatible (unpinned — lets pip resolve correctly)
+# ============================================================
+
+# --- Web Framework ---
+fastapi
+uvicorn[standard]
+
+# --- Image Processing ---
+opencv-python-headless
+numpy
+
+# --- AI / Object Detection ---
+ultralytics
+
+# --- Data Validation ---
+pydantic
+pydantic-settings
+
+# --- Configuration ---
+python-dotenv
+
+# --- File Handling (multipart) ---
+python-multipart
+
+# --- Async HTTP (future integrations) ---
+httpx
+
+# --- Utilities ---
+Pillow
+aiofiles

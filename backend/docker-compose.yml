@@ -1,0 +1,78 @@
+# ============================================================
+# Walking Eye - AI Perception Engine
+# Docker Compose
+#
+# Usage:
+#   Development:  docker compose up
+#   Production:   docker compose -f docker-compose.yml up -d
+#   Rebuild:      docker compose up --build
+#   Logs:         docker compose logs -f
+# ============================================================
+
+services:
+  perception-engine:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: walking-eye-backend
+    restart: unless-stopped
+
+    ports:
+      - "${PORT:-8000}:8000"
+
+    environment:
+      # Server
+      - HOST=0.0.0.0
+      - PORT=8000
+      - DEBUG=${DEBUG:-false}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-["*"]}
+
+      # Model
+      - MODEL_PATH=${MODEL_PATH:-models/yolov8n.pt}
+      - CONFIDENCE_THRESHOLD=${CONFIDENCE_THRESHOLD:-0.45}
+
+      # Image Processing
+      - MAX_IMAGE_SIZE_MB=${MAX_IMAGE_SIZE_MB:-10.0}
+      - MAX_IMAGE_DIMENSION=${MAX_IMAGE_DIMENSION:-1280}
+
+      # Logging
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_DIR=logs
+
+      # Future flags
+      - ENABLE_OCR=${ENABLE_OCR:-false}
+      - ENABLE_DEPTH=${ENABLE_DEPTH:-false}
+      - ENABLE_TRACKING=${ENABLE_TRACKING:-false}
+      - EXTERNAL_LLM_API_KEY=${EXTERNAL_LLM_API_KEY:-}
+      - EXTERNAL_LLM_ENDPOINT=${EXTERNAL_LLM_ENDPOINT:-}
+
+    volumes:
+      # Persist downloaded models across container restarts
+      - ./models:/app/models
+      # Persist logs
+      - ./logs:/app/logs
+      # Persist uploads (optional, for future debugging)
+      - ./uploads:/app/uploads
+
+    healthcheck:
+      test: ["CMD", "python", "-c",
+        "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s    # Give model download time on first run
+
+    # Resource limits — tune based on your hardware
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 1G
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
