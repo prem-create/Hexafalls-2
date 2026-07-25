@@ -1,0 +1,4 @@
+enum VoiceCommand {
+  findPhone,
+  startDetection,
+}
