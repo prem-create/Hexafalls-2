@@ -40,12 +40,19 @@ class _CameraScreenState extends State<CameraScreen> {
   String? _error;
 
   Timer? _streamTimer;
+  int _adaptiveStreamIntervalMs = AppConfig.streamIntervalMs;
+  double? _analysisDurationEmaMs;
   final SpeechService _speech = SpeechService();
   late final VoiceCommandService _voiceCommands;
   bool _voiceListening = false;
   bool _phoneRinging = false;
   bool _startDetectionRequested = false;
   String? _voiceTranscript;
+
+  static const int _minStreamIntervalMs = 100;
+  static const int _maxStreamIntervalMs = 1500;
+  static const double _intervalSafetyMultiplier = 1.15;
+  static const double _intervalEmaAlpha = 0.25;
 
   @override
   void initState() {
@@ -128,20 +135,22 @@ class _CameraScreenState extends State<CameraScreen> {
   }
 
   void _startStream() {
+    if (_streaming) return;
     setState(() {
       _streaming = true;
       _error = null;
     });
 
-    _streamTimer = Timer.periodic(
-      Duration(milliseconds: AppConfig.streamIntervalMs),
-      (_) => _captureAndAnalyze(),
-    );
+    _adaptiveStreamIntervalMs = AppConfig.streamIntervalMs;
+    _analysisDurationEmaMs = null;
+    _scheduleNextCapture(delayMs: 0);
   }
 
   void _stopStream() {
     _streamTimer?.cancel();
     _streamTimer = null;
+    _analysisDurationEmaMs = null;
+    _adaptiveStreamIntervalMs = AppConfig.streamIntervalMs;
     if (mounted) {
       setState(() {
         _streaming = false;
@@ -157,9 +166,38 @@ class _CameraScreenState extends State<CameraScreen> {
     }
   }
 
+  void _scheduleNextCapture({int? delayMs}) {
+    if (!_streaming || !mounted) return;
+
+    _streamTimer?.cancel();
+    _streamTimer = Timer(
+      Duration(milliseconds: delayMs ?? _adaptiveStreamIntervalMs),
+      () => _captureAndAnalyze(),
+    );
+  }
+
+  void _updateAdaptiveStreamInterval(int observedDurationMs) {
+    final clampedObserved = observedDurationMs.clamp(50, _maxStreamIntervalMs);
+    final nextEma = _analysisDurationEmaMs == null
+        ? clampedObserved.toDouble()
+        : (_analysisDurationEmaMs! * (1 - _intervalEmaAlpha)) +
+            (clampedObserved * _intervalEmaAlpha);
+
+    _analysisDurationEmaMs = nextEma;
+
+    final nextInterval = (nextEma * _intervalSafetyMultiplier).round();
+    _adaptiveStreamIntervalMs = nextInterval.clamp(
+      _minStreamIntervalMs,
+      _maxStreamIntervalMs,
+    );
+  }
+
   Future<void> _captureAndAnalyze() async {
-    if (_requestInFlight || !_controller.value.isInitialized) return;
+    if (!_streaming || _requestInFlight || !_controller.value.isInitialized) {
+      return;
+    }
     _requestInFlight = true;
+    final stopwatch = Stopwatch()..start();
 
     try {
       final file = await _controller.takePicture();
@@ -181,7 +219,12 @@ class _CameraScreenState extends State<CameraScreen> {
         setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
       }
     } finally {
+      stopwatch.stop();
       _requestInFlight = false;
+      if (_streaming) {
+        _updateAdaptiveStreamInterval(stopwatch.elapsedMilliseconds);
+        _scheduleNextCapture();
+      }
     }
   }
 
