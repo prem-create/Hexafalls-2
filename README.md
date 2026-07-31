@@ -1,4 +1,4 @@
-# 👁️ Walking Eye — AI Perception & Spatial Assistance Engine
+# 👁️ Meera The Walk Assistant — AI Perception & Spatial Assistance Engine
 
 > **Empowering visually impaired individuals with real-time AI perception, metric depth estimation, temporal motion tracking, and natural-language voice feedback.**
 
@@ -6,7 +6,7 @@
 
 ## 📌 Project Overview
 
-**Walking Eye** is an end-to-end assistive technology system designed to act as an artificial pair of eyes for blind and visually impaired users. By combining real-time smartphone camera processing with a high-performance Python AI engine, Walking Eye provides immediate auditory awareness of the user's surroundings, pinpoints obstacles, measures distances, detects approaching hazards, and responds to natural voice commands.
+**Meera The Walk Assistant** is an end-to-end assistive technology system designed to act as an artificial pair of eyes for blind and visually impaired users. By combining real-time smartphone camera processing with a high-performance Python AI engine, Meera provides immediate auditory awareness of the user's surroundings, pinpoints obstacles, measures distances, detects approaching hazards, and responds to natural voice commands.
 
 The project consists of two primary components:
 1. **[Frontend (Mobile App)](./Frontend/blind_eye)**: A Flutter-based mobile client featuring adaptive high-frequency frame streaming, Text-To-Speech (TTS) spoken navigation, Speech-To-Text (STT) voice command recognition, tactile UI controls, and emergency device finder audio alerts.
@@ -30,7 +30,7 @@ The project consists of two primary components:
 ## 🏗️ System Architecture
 
 ```
-                                  WALKING EYE SYSTEM ARCHITECTURE
+                          MEERA THE WALK ASSISTANT SYSTEM ARCHITECTURE
                                   
 
  ┌─────────────────────────────────────────────────────────────────────────────────────────────┐
@@ -96,7 +96,7 @@ The project consists of two primary components:
 ## 📁 Repository Structure
 
 ```
-Hexafalls-2/
+Meera/
 ├── README.md                          # Master project documentation (you are here)
 │
 ├── Frontend/                          # Flutter Mobile Client Application
@@ -181,7 +181,7 @@ docker compose up --build
    * **Windows**: Run `ipconfig` (look for `IPv4 Address` under your active Wi-Fi adapter, e.g. `192.168.1.45`)
    * **macOS/Linux**: Run `ifconfig` or `ip a`
 
-2. Open [`Frontend/blind_eye/lib/config/app_config.dart`](file:///c:/Users/bhavesh/Hexafalls-2/Frontend/blind_eye/lib/config/app_config.dart) and update `baseUrl`:
+2. Open [`Frontend/blind_eye/lib/config/app_config.dart`](./Frontend/blind_eye/lib/config/app_config.dart) and update `baseUrl`:
    ```dart
    class AppConfig {
      static const String baseUrl = 'http://192.168.1.45:8000'; // Replace with your host IP
