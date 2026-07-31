@@ -1,4 +1,4 @@
-# 🧠 Walking Eye — AI Perception & Motion Engine
+# 🧠 Meera The Walk Assistant — AI Perception & Motion Engine
 
 > **Production-grade Python backend providing real-time YOLOv8 object detection, MiDaS monocular metric depth estimation, spatial positioning, temporal motion tracking, and hazard assessment.**
 
@@ -6,7 +6,7 @@
 
 ## 📌 Overview
 
-The **Walking Eye Backend** is a high-performance FastAPI microservice acting as the intelligence layer for visual assistance applications. It ingests video/camera frame images from client devices, runs deep learning vision pipelines, tracks objects across frames, calculates spatial vectors and closing speeds, and returns structured spatial data along with natural-language audio summaries.
+The **Meera Backend** is a high-performance FastAPI microservice acting as the intelligence layer for visual assistance applications. It ingests video/camera frame images from client devices, runs deep learning vision pipelines, tracks objects across frames, calculates spatial vectors and closing speeds, and returns structured spatial data along with natural-language audio summaries.
 
 ---
 
@@ -137,7 +137,7 @@ Server identification ping.
 **Response**:
 ```json
 {
-  "name": "Walking Eye - Perception Engine",
+  "name": "Meera - Perception Engine",
   "version": "1.2.0",
   "docs": "/docs",
   "health": "/health"
