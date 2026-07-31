@@ -1,4 +1,4 @@
-# 📱 Walking Eye — Flutter Mobile Client
+# 📱 Meera The Walk Assistant — Flutter Mobile Client
 
 > **Accessible real-time visual perception, speech interface, and auditory spatial guidance for blind and visually impaired users.**
 
@@ -6,7 +6,7 @@
 
 ## 📌 Overview
 
-The **Walking Eye Frontend** (`blind_eye`) is a high-performance Flutter mobile application designed for visual perception assistance. The app continuously captures camera frames, sends them to the Python FastAPI backend, and translates structured spatial data into immediate, natural-language voice feedback (TTS) and haptic/auditory warnings.
+The **Meera Frontend** (`blind_eye`) is a high-performance Flutter mobile application designed for visual perception assistance. The app continuously captures camera frames, sends them to the Python FastAPI backend, and translates structured spatial data into immediate, natural-language voice feedback (TTS) and haptic/auditory warnings.
 
 ---
 
@@ -48,7 +48,7 @@ lib/
 
 ## ⚙️ Configuration & Environment
 
-All connection settings reside in [`lib/config/app_config.dart`](file:///c:/Users/bhavesh/Hexafalls-2/Frontend/blind_eye/lib/config/app_config.dart).
+All connection settings reside in [`lib/config/app_config.dart`](./lib/config/app_config.dart).
 
 ```dart
 class AppConfig {
